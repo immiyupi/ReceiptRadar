@@ -15,6 +15,20 @@ app.use(express.json({ limit: '10mb' }));
 // Serve static web pages from public directory
 app.use(express.static('public'));
 
+// Set Content Security Policy headers
+app.use((req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; " +
+    "img-src 'self' data: https:; " +
+    "font-src https://fonts.gstatic.com https://fonts.googleapis.com; " +
+    "connect-src 'self' https://generativelanguage.googleapis.com;"
+  );
+  next();
+});
+
 // Initialize Gemini client
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
