@@ -1,5 +1,5 @@
 # ReceiptRadar 🔍⚡
-> **Google Gemini-Powered Expense Intelligence & Dashboard**
+> **Google Gemini-Powered Income & Expense Intelligence & Dashboard**
 
 ReceiptRadar is a modern, premium financial tracking web application that allows users to log and analyze their income and expenses. It combines standard manual ledger logging with **automated, AI-powered receipt scanning** using the Google Gemini API (`gemini-2.5-flash` model). By uploading or dragging-and-dropping a receipt image, ReceiptRadar instantly parses the vendor, date, final transaction amount, and applies categorizations using structured JSON schema output from Gemini.
 
@@ -12,7 +12,7 @@ ReceiptRadar is a modern, premium financial tracking web application that allows
 3. **Unified Financial Ledger**: Double-entry bookkeeping structure storing all income and expense flows inside a unified SQLite schema.
 4. **Rich Dashboard & Visualizations**:
    - **Interactive Charts**: Responsive pie chart visualizations of categories powered by `Chart.js`.
-   - **Real-Time KPI Metrics**: Track total spend, total receipts scanned, top-spending category, and average transaction amount.
+   - **Real-Time KPI Metrics**: Track total income, total expenses, net balance, top-spending category, total receipts scanned, and average expense per transaction.
    - **Actionable Log**: Search, filter, edit, delete, and clear records in a cozy, animated dashboard UI.
 5. **Modern, Responsive Frontend**: Features a beautiful sage-green dark-accented UI built with Tailwind CSS v4, Google Fonts (Outfit & Inter), glassmorphism styles, drag-and-drop file regions, and loading overlays.
 

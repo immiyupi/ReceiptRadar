@@ -124,7 +124,17 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/transactions', authenticateToken, async (req, res) => {
   try {
     const rows = await dbAll(
-      'SELECT * FROM transactions WHERE user_id = ? ORDER BY transaction_date DESC, id DESC',
+      `SELECT t.*, c.type 
+       FROM transactions t
+       LEFT JOIN categories c ON c.id = (
+         SELECT id FROM categories 
+         WHERE name = t.category 
+           AND (user_id = t.user_id OR user_id IS NULL) 
+         ORDER BY user_id DESC 
+         LIMIT 1
+       )
+       WHERE t.user_id = ? 
+       ORDER BY t.transaction_date DESC, t.id DESC`,
       [req.user.id]
     );
 
@@ -135,9 +145,12 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
       category: r.category,
       amount: r.amount,
       description: r.description,
+      vendor: r.description, // maps description to vendor for frontend
       transaction_date: r.transaction_date,
+      date: r.transaction_date, // maps transaction_date to date for frontend
       created_at: r.created_at,
-      metadata: r.metadata ? JSON.parse(r.metadata) : null
+      metadata: r.metadata ? JSON.parse(r.metadata) : null,
+      type: r.type || 'expense' // explicit type
     }));
 
     res.json(mapped);

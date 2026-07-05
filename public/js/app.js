@@ -120,6 +120,7 @@ window.handleLogout = handleLogout;
 // --- 2. State & Configurations ---
 let transactions = []; // Main array syncing transaction list
 let chartInstance = null;
+let monthlyChartInstance = null;
 let currentChartType = "doughnut"; // 'doughnut' or 'bar'
 let selectedFile = null;
 
@@ -129,6 +130,7 @@ const VALID_CATEGORIES = [
   "Travel",
   "Shopping",
   "Investment",
+  "Salary / Wages",
   "Other"
 ];
 
@@ -157,10 +159,12 @@ const categoryFilter = document.getElementById("category-filter");
 const clearAllDataBtn = document.getElementById("clear-all-data-btn");
 
 // Stat Elements
-const statTotalSpend = document.getElementById("stat-total-spend");
+const statTotalIncome = document.getElementById("stat-total-income");
+const statTotalExpense = document.getElementById("stat-total-expense");
+const statNetBalance = document.getElementById("stat-net-balance");
 const statScans = document.getElementById("stat-scans");
 const statTopCategory = document.getElementById("stat-top-category");
-const statAvgSpend = document.getElementById("stat-avg-spend");
+const statAvgExpense = document.getElementById("stat-avg-expense");
 
 // Manual Add Modal Elements
 const openManualModalBtn = document.getElementById("open-add-manual-modal");
@@ -188,7 +192,12 @@ async function fetchTransactions() {
       throw new Error('Could not sync transaction logs.');
     }
 
-    transactions = await response.json();
+    const data = await response.json();
+    transactions = data.map(t => ({
+      ...t,
+      date: t.date || t.transaction_date,
+      vendor: t.vendor || t.description
+    }));
     updateDashboard();
   } catch (error) {
     console.error(error);
@@ -419,27 +428,52 @@ function updateDashboard() {
   renderCharts();
 }
 
+function formatDateToDMY(dateStr) {
+  if (!dateStr) return "";
+  const parts = dateStr.split("-");
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+  return dateStr;
+}
+
 function renderKPIs() {
-  if (transactions.length === 0) {
-    statTotalSpend.textContent = "฿0.00";
-    statScans.textContent = "0";
-    statTopCategory.textContent = "N/A";
-    statAvgSpend.textContent = "฿0.00";
+  const expenses = transactions.filter((t) => t.type === "expense");
+  const incomes = transactions.filter((t) => t.type === "income");
+  const scanCount = transactions.filter((e) => e.metadata && e.metadata.source === "receipt-scan").length;
+
+  statScans.textContent = scanCount.toString();
+
+  const totalIncome = incomes.reduce((acc, curr) => acc + curr.amount, 0);
+  const totalExpense = expenses.reduce((acc, curr) => acc + curr.amount, 0);
+  const netBalance = totalIncome - totalExpense;
+
+  if (statTotalIncome) statTotalIncome.textContent = `฿${totalIncome.toFixed(2)}`;
+  if (statTotalExpense) statTotalExpense.textContent = `฿${totalExpense.toFixed(2)}`;
+
+  // Net Balance with dynamic color class
+  if (statNetBalance) {
+    statNetBalance.textContent = `฿${Math.abs(netBalance).toFixed(2)}`;
+    if (netBalance >= 0) {
+      statNetBalance.className = "heading-font text-2xl sm:text-3xl font-extrabold text-emerald-600";
+    } else {
+      statNetBalance.className = "heading-font text-2xl sm:text-3xl font-extrabold text-rose-600";
+    }
+  }
+
+  // Average Expense: denominator is count of expense transactions only
+  if (expenses.length === 0) {
+    if (statTopCategory) statTopCategory.textContent = "N/A";
+    if (statAvgExpense) statAvgExpense.textContent = "฿0.00";
     return;
   }
 
-  const total = transactions.reduce((acc, curr) => acc + curr.amount, 0);
-  statTotalSpend.textContent = `฿${total.toFixed(2)}`;
+  const avg = totalExpense / expenses.length;
+  if (statAvgExpense) statAvgExpense.textContent = `฿${avg.toFixed(2)}`;
 
-  const scanCount = transactions.filter((e) => e.metadata && e.metadata.source === "receipt-scan").length;
-  statScans.textContent = scanCount.toString();
-
-  const avg = total / transactions.length;
-  statAvgSpend.textContent = `฿${avg.toFixed(2)}`;
-
-  // Find Top Category
+  // Find Top Category (expenses only)
   const categoryTotals = {};
-  transactions.forEach((e) => {
+  expenses.forEach((e) => {
     categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
   });
 
@@ -451,7 +485,7 @@ function renderKPIs() {
       topCat = cat;
     }
   });
-  statTopCategory.textContent = topCat;
+  if (statTopCategory) statTopCategory.textContent = topCat;
 }
 
 function renderExpensesTable() {
@@ -476,18 +510,52 @@ function renderExpensesTable() {
     const tr = document.createElement("tr");
     tr.className = "hover:bg-white/50 transition-colors border-b border-[#13261f]/10 relative group";
 
-    // Date picker field
+    // Date picker field (displays DD/MM/YYYY, double click to edit via HTML date picker)
     const tdDate = document.createElement("td");
-    tdDate.className = "px-4 py-3";
+    tdDate.className = "px-4 py-3 font-mono text-xs text-[#13261f]";
+    const formattedDate = formatDateToDMY(expense.date);
     tdDate.innerHTML = `
+      <span class="date-display cursor-pointer hover:underline" title="Double click to edit">${formattedDate}</span>
       <input 
         type="date" 
         value="${expense.date}" 
-        class="bg-transparent text-[#13261f] w-full focus:outline-none focus:border-b focus:border-[#13261f]/30 p-0 border-0 focus:ring-0 text-xs font-mono"
+        class="date-input hidden bg-transparent text-[#13261f] w-full focus:outline-none focus:border-b focus:border-[#13261f]/30 p-0 border-0 focus:ring-0 text-xs font-mono"
       >
     `;
-    tdDate.querySelector("input").addEventListener("change", (e) => {
-      updateTransactionField(expense.id, "date", e.target.value);
+    
+    const displaySpan = tdDate.querySelector(".date-display");
+    const dateInput = tdDate.querySelector(".date-input");
+    
+    displaySpan.addEventListener("dblclick", () => {
+      displaySpan.classList.add("hidden");
+      dateInput.classList.remove("hidden");
+      dateInput.focus();
+    });
+    
+    dateInput.addEventListener("change", async (e) => {
+      let val = e.target.value;
+      if (val) {
+        // Enforce YYYY-MM-DD format
+        if (val.includes("/") && val.split("/").length === 3) {
+          const parts = val.split("/");
+          const day = parts[0].padStart(2, "0");
+          const month = parts[1].padStart(2, "0");
+          const year = parts[2];
+          val = `${year}-${month}-${day}`;
+        }
+        await updateTransactionField(expense.id, "date", val);
+      } else {
+        dateInput.value = expense.date;
+        displaySpan.classList.remove("hidden");
+        dateInput.classList.add("hidden");
+      }
+    });
+    
+    dateInput.addEventListener("blur", () => {
+      setTimeout(() => {
+        displaySpan.classList.remove("hidden");
+        dateInput.classList.add("hidden");
+      }, 200);
     });
 
     // Vendor text field
@@ -531,17 +599,18 @@ function renderExpensesTable() {
     });
     tdCat.appendChild(select);
 
-    // Amount field with Thai Baht symbol
+    // Amount field with Thai Baht symbol and type-based text styling
+    const amountColorClass = expense.type === 'income' ? 'text-emerald-600 font-bold' : 'text-rose-600';
     const tdAmount = document.createElement("td");
-    tdAmount.className = "px-4 py-3 text-right";
+    tdAmount.className = `px-4 py-3 text-right ${amountColorClass}`;
     tdAmount.innerHTML = `
       <div class="flex items-center justify-end gap-1">
-        <span class="text-[#13261f]/60 text-xs">฿</span>
+        <span class="text-xs">฿</span>
         <input 
           type="number" 
           step="0.01" 
           value="${expense.amount.toFixed(2)}" 
-          class="bg-transparent text-[#13261f] text-right focus:outline-none focus:border-b focus:border-[#13261f]/30 p-0 border-0 focus:ring-0 text-xs font-mono w-20"
+          class="bg-transparent text-right focus:outline-none focus:border-b focus:border-[#13261f]/30 p-0 border-0 focus:ring-0 text-xs font-mono w-20 ${amountColorClass}"
         >
       </div>
     `;
@@ -580,12 +649,15 @@ function renderExpensesTable() {
 }
 
 function renderCharts() {
+  // --- 1. Category Spending Breakdown Chart (Expenses Only) ---
   const aggregation = {};
   VALID_CATEGORIES.forEach((cat) => {
     aggregation[cat] = 0;
   });
 
-  transactions.forEach((e) => {
+  const expensesOnly = transactions.filter((t) => t.type === "expense");
+
+  expensesOnly.forEach((e) => {
     if (aggregation[e.category] !== undefined) {
       aggregation[e.category] += e.amount;
     } else {
@@ -603,90 +675,205 @@ function renderCharts() {
       chartInstance.destroy();
       chartInstance = null;
     }
-    return;
-  }
-  chartEmptyState.classList.add("hidden");
+  } else {
+    chartEmptyState.classList.add("hidden");
 
-  const bgColors = categories.map((cat) => categoryConfig[cat]?.color || "rgba(100, 116, 139, 0.85)");
-  const borderColors = categories.map((cat) => categoryConfig[cat]?.border || "rgb(100, 116, 139)");
+    const bgColors = categories.map((cat) => categoryConfig[cat]?.color || "rgba(100, 116, 139, 0.85)");
+    const borderColors = categories.map((cat) => categoryConfig[cat]?.border || "rgb(100, 116, 139)");
 
-  if (chartInstance) {
-    chartInstance.destroy();
-  }
+    if (chartInstance) {
+      chartInstance.destroy();
+    }
 
-  const ctx = document.getElementById("categoryChart").getContext("2d");
-  const isDoughnut = currentChartType === "doughnut";
+    const ctx = document.getElementById("categoryChart").getContext("2d");
+    const isDoughnut = currentChartType === "doughnut";
 
-  chartInstance = new Chart(ctx, {
-    type: currentChartType,
-    data: {
-      labels: categories,
-      datasets: [{
-        label: "Spend Amount (฿)",
-        data: dataValues,
-        backgroundColor: bgColors,
-        borderColor: borderColors,
-        borderWidth: 1.5,
-        hoverOffset: 12
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: true,
-          position: isDoughnut ? "right" : "top",
-          labels: {
-            color: "rgba(19, 38, 31, 0.8)",
-            font: {
-              family: "Inter",
-              size: 10
-            },
-            boxWidth: 10,
-            padding: 10
-          }
-        },
-        tooltip: {
-          backgroundColor: "rgba(255, 255, 255, 0.95)",
-          borderColor: "rgba(19, 38, 31, 0.2)",
-          borderWidth: 1,
-          titleColor: "#13261f",
-          bodyColor: "#13261f",
-          bodyFont: {
-            family: "Inter",
-            weight: "bold"
+    chartInstance = new Chart(ctx, {
+      type: currentChartType,
+      data: {
+        labels: categories,
+        datasets: [{
+          label: "Spend Amount (฿)",
+          data: dataValues,
+          backgroundColor: bgColors,
+          borderColor: borderColors,
+          borderWidth: 1.5,
+          hoverOffset: 12
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: isDoughnut ? "right" : "top",
+            labels: {
+              color: "rgba(19, 38, 31, 0.8)",
+              font: {
+                family: "Inter",
+                size: 10
+              },
+              boxWidth: 10,
+              padding: 10
+            }
           },
-          callbacks: {
-            label: function (context) {
-              const val = context.raw || 0;
-              const pct = totalSum > 0 ? ((val / totalSum) * 100).toFixed(1) : 0;
-              return ` ฿${val.toFixed(2)} (${pct}%)`;
+          tooltip: {
+            backgroundColor: "rgba(255, 255, 255, 0.95)",
+            borderColor: "rgba(19, 38, 31, 0.2)",
+            borderWidth: 1,
+            titleColor: "#13261f",
+            bodyColor: "#13261f",
+            bodyFont: {
+              family: "Inter",
+              weight: "bold"
+            },
+            callbacks: {
+              label: function (context) {
+                const val = context.raw || 0;
+                const pct = totalSum > 0 ? ((val / totalSum) * 100).toFixed(1) : 0;
+                return ` ฿${val.toFixed(2)} (${pct}%)`;
+              }
             }
           }
-        }
-      },
-      scales: isDoughnut ? {} : {
-        x: {
-          grid: { color: "rgba(19, 38, 31, 0.08)" },
-          ticks: {
-            color: "rgba(19, 38, 31, 0.7)",
-            font: { size: 10 }
-          }
         },
-        y: {
-          grid: { color: "rgba(19, 38, 31, 0.08)" },
-          ticks: {
-            color: "rgba(19, 38, 31, 0.7)",
-            font: { size: 10 },
-            callback: function (value) {
-              return "฿" + value;
+        scales: isDoughnut ? {} : {
+          x: {
+            grid: { color: "rgba(19, 38, 31, 0.08)" },
+            ticks: {
+              color: "rgba(19, 38, 31, 0.7)",
+              font: { size: 10 }
+            }
+          },
+          y: {
+            grid: { color: "rgba(19, 38, 31, 0.08)" },
+            ticks: {
+              color: "rgba(19, 38, 31, 0.7)",
+              font: { size: 10 },
+              callback: function (value) {
+                return "฿" + value;
+              }
             }
           }
         }
       }
+    });
+  }
+
+  // --- 2. Monthly Breakdown Grouped Bar Chart (2026 Current Year) ---
+  const labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const incomeData = Array(12).fill(0);
+  const expenseData = Array(12).fill(0);
+
+  let currentYearDataCount = 0;
+
+  transactions.forEach((e) => {
+    // Filter to only include records where the transaction date is in 2026
+    if (e.date && e.date.startsWith("2026-")) {
+      const parts = e.date.split("-");
+      const monthIndex = parseInt(parts[1], 10) - 1;
+      if (monthIndex >= 0 && monthIndex < 12) {
+        if (e.type === "income") {
+          incomeData[monthIndex] += e.amount;
+        } else {
+          expenseData[monthIndex] += e.amount;
+        }
+        currentYearDataCount++;
+      }
     }
   });
+
+  const monthlyEmptyState = document.getElementById("monthly-chart-empty-state");
+  if (currentYearDataCount === 0) {
+    if (monthlyEmptyState) monthlyEmptyState.classList.remove("hidden");
+    if (monthlyChartInstance) {
+      monthlyChartInstance.destroy();
+      monthlyChartInstance = null;
+    }
+  } else {
+    if (monthlyEmptyState) monthlyEmptyState.classList.add("hidden");
+
+    if (monthlyChartInstance) {
+      monthlyChartInstance.destroy();
+    }
+
+    const mctx = document.getElementById("monthlyChart").getContext("2d");
+    monthlyChartInstance = new Chart(mctx, {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Income (฿)",
+            data: incomeData,
+            backgroundColor: "#10b981", // Green
+            borderColor: "#059669",
+            borderWidth: 1
+          },
+          {
+            label: "Expense (฿)",
+            data: expenseData,
+            backgroundColor: "#f43f5e", // Red
+            borderColor: "#e11d48",
+            borderWidth: 1
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: "top",
+            labels: {
+              color: "rgba(19, 38, 31, 0.8)",
+              font: {
+                family: "Inter",
+                size: 10
+              }
+            }
+          },
+          tooltip: {
+            backgroundColor: "rgba(255, 255, 255, 0.95)",
+            borderColor: "rgba(19, 38, 31, 0.2)",
+            borderWidth: 1,
+            titleColor: "#13261f",
+            bodyColor: "#13261f",
+            bodyFont: {
+              family: "Inter",
+              weight: "bold"
+            },
+            callbacks: {
+              label: function (context) {
+                const val = context.raw || 0;
+                return ` ฿${val.toFixed(2)}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: "rgba(19, 38, 31, 0.08)" },
+            ticks: {
+              color: "rgba(19, 38, 31, 0.7)",
+              font: { size: 10 }
+            }
+          },
+          y: {
+            grid: { color: "rgba(19, 38, 31, 0.08)" },
+            ticks: {
+              color: "rgba(19, 38, 31, 0.7)",
+              font: { size: 10 },
+              callback: function (value) {
+                return "฿" + value;
+              }
+            }
+          }
+        }
+      }
+    });
+  }
 }
 
 function changeChartType(type) {
