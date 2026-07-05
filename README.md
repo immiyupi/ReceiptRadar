@@ -9,7 +9,7 @@ ReceiptRadar is a modern, premium financial tracking web application that allows
 
 1. **AI Receipt Scanning**: Integrates Google's next-generation `gemini-2.5-flash` model to analyze receipt images and extract transaction metadata (merchant name, exact total paid after discounts/taxes, date in ISO format, and logical categorization).
 2. **Secure Multi-User System**: Built-in authentication using JSON Web Tokens (JWT) and `bcryptjs` password hashing, ensuring users only see and manage their own financial logs.
-3. **Unified Financial Ledger**: Double-entry bookkeeping structure storing all income and expense flows inside a unified SQLite schema.
+3. **Unified Financial Ledger**: Double-entry bookkeeping structure storing all income and expense flows inside a unified Firestore schema.
 4. **Rich Dashboard & Visualizations**:
    - **Interactive Charts**: Responsive pie chart visualizations of categories powered by `Chart.js`.
    - **Real-Time KPI Metrics**: Track total income, total expenses, net balance, top-spending category, total receipts scanned, and average expense per transaction.
@@ -23,7 +23,7 @@ ReceiptRadar is a modern, premium financial tracking web application that allows
 - **Frontend**: HTML5, Vanilla JavaScript, CSS, [Tailwind CSS v4 (CDN)](https://tailwindcss.com/), [Chart.js](https://www.chartjs.org/)
 - **Backend**: Node.js (ES Module format), [Express.js](https://expressjs.com/)
 - **AI SDK**: [@google/genai](https://www.npmjs.com/package/@google/genai) (Standard modern Google Gen AI SDK)
-- **Database**: [SQLite3](https://sqlite.org/) (Local file-based SQL store)
+- **Database**: [Firebase Firestore](https://firebase.google.com/docs/firestore) (Cloud NoSQL database)
 - **Auth & Crypto**: `jsonwebtoken` (JWT), `bcryptjs` (Password hashing)
 - **Configuration & Environment**: `dotenv`
 
@@ -34,13 +34,10 @@ ReceiptRadar is a modern, premium financial tracking web application that allows
 ```
 ├── .env                  # Port, JWT secret, and Gemini API keys (git-ignored)
 ├── .gitignore            # Git ignore configuration
-├── db.js                 # SQLite database client & initial schema tables setup
+├── db.js                 # Firebase Firestore database client & initial collection setup
 ├── server.js             # Express API application & AI extraction integration
 ├── package.json          # Node dependencies, scripts, and type declarations
 ├── package-lock.json     # Locked dependency graph
-├── database.db           # Local SQLite database file (created on startup)
-├── database.txt          # Reference design document for DB architectures
-├── test_gemini.js        # Script to test the Gemini API integration locally
 └── public/               # Static folder containing client-side assets
     ├── index.html        # Core Dashboard & Ledger interface (Tailwind/Chart.js)
     ├── login.html        # Registration, onboarding, and login interface
@@ -52,31 +49,29 @@ ReceiptRadar is a modern, premium financial tracking web application that allows
 
 ## 🗄️ Database Architecture
 
-The application implements a local SQL schema in **SQLite**. Key tables include:
+The application implements a cloud NoSQL schema in **Firebase Firestore**. Key collections include:
 
-### 1. `users` Table
+### 1. `users` Collection
 Stores user accounts and hashed credentials.
-```sql
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+```javascript
+{
+  id: string,              // Auto-generated Firestore document ID
+  name: string,
+  email: string,           // Unique email address
+  password_hash: string,   // bcryptjs hashed password
+  created_at: string       // ISO timestamp
+}
 ```
 
-### 2. `categories` Table
-A hybrid lookup table containing both system defaults (`user_id = NULL`) and custom, user-defined categories.
-```sql
-CREATE TABLE IF NOT EXISTS categories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  UNIQUE(user_id, name)
-);
+### 2. `categories` Collection
+A hybrid lookup collection containing both system defaults (`user_id = NULL`) and custom, user-defined categories.
+```javascript
+{
+  id: string,        // Auto-generated Firestore document ID
+  user_id: string | null,  // null = system-wide, string = user-specific
+  name: string,
+  type: string      // 'expense' or 'income'
+}
 ```
 *Seeded categories (Defaults):*
 - 🍔 **Food & Dining** (expense)
@@ -86,20 +81,20 @@ CREATE TABLE IF NOT EXISTS categories (
 - 📈 **Investment** (expense)
 - 💵 **Salary / Wages** (income)
 
-### 3. `transactions` Table
-Unified ledger for all financial movements. Features custom receipt details (e.g. extracted vendor, scan status) inside a JSON `metadata` string field.
-```sql
-CREATE TABLE IF NOT EXISTS transactions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
-  category TEXT NOT NULL,
-  amount REAL NOT NULL,
-  description TEXT,
-  transaction_date TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  metadata TEXT,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+### 3. `transactions` Collection
+Unified ledger for all financial movements. Features custom receipt details (e.g. extracted vendor, scan status) inside a JSON `metadata` object.
+```javascript
+{
+  id: string,        // Auto-generated Firestore document ID
+  user_id: string,   // Reference to user collection
+  category: string,
+  amount: number,
+  description: string,
+  transaction_date: string,  // ISO date string YYYY-MM-DD
+  created_at: string,         // ISO timestamp
+  metadata: object | null,    // Additional receipt data
+  type: string               // 'expense' or 'income'
+}
 ```
 
 ---
@@ -134,6 +129,18 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 ---
 
+## 🚀 Deployment
+
+### Vercel Deployment
+1. Push to GitHub
+2. Import project in Vercel
+3. Add environment variables:
+   - `GEMINI_API_KEY` - Your Google Gemini API key
+   - `FIREBASE_SERVICE_ACCOUNT` - Firebase service account JSON (as a string)
+   - `JWT_SECRET` - Random secret string
+   - `JWT_EXPIRES_IN` - e.g., "7d"
+4. Deploy
+
 ## 🚀 Installation & Setup
 
 1. **Clone the repository**:
@@ -154,6 +161,7 @@ CREATE TABLE IF NOT EXISTS transactions (
    JWT_SECRET=your_super_secure_jwt_secret_phrase
    JWT_EXPIRES_IN=7d
    GEMINI_API_KEY=AIzaSy... (Your Google Gemini API Key)
+   FIREBASE_SERVICE_ACCOUNT={"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}
    ```
 
 4. **Verify Gemini API connection (Optional)**:

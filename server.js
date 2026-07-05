@@ -130,10 +130,9 @@ app.post('/api/auth/login', async (req, res) => {
 // ── Transactions API: Get List (Protected) ──
 app.get('/api/transactions', authenticateToken, async (req, res) => {
   try {
-    // Fetch all transactions for the logged-in user, newest first
+    // Fetch all transactions for the logged-in user
     const snap = await db.collection('transactions')
       .where('user_id', '==', req.user.id)
-      .orderBy('transaction_date', 'desc')
       .get();
 
     // Fetch global + user-specific categories for type enrichment
@@ -158,14 +157,16 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
         category: r.category,
         amount: r.amount,
         description: r.description,
-        vendor: r.description,          // maps description to vendor for frontend
+        vendor: r.description,
         transaction_date: r.transaction_date,
-        date: r.transaction_date,       // maps transaction_date to date for frontend
+        date: r.transaction_date,
         created_at: r.created_at,
         metadata: r.metadata || null,
         type: r.type || categoryTypeMap[r.category] || 'expense'
       });
     });
+
+    transactions.sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
 
     res.json(transactions);
   } catch (err) {
@@ -190,13 +191,32 @@ app.post('/api/transactions', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Category, amount, and date are required.' });
     }
 
+    let transactionType = type;
+
+    if (!transactionType) {
+      const catSnap = await db.collection('categories')
+        .where('name', '==', category)
+        .where('user_id', 'in', [null, req.user.id])
+        .limit(1)
+        .get();
+
+      if (!catSnap.empty) {
+        const catDoc = catSnap.docs.find(doc => doc.data().user_id === req.user.id) || catSnap.docs[0];
+        transactionType = catDoc.data().type;
+      }
+
+      if (!transactionType) {
+        transactionType = 'expense';
+      }
+    }
+
     const newDoc = await db.collection('transactions').add({
       user_id: req.user.id,
       category,
       amount: parseFloat(amount),
       description: description || '',
       transaction_date,
-      type: type || 'expense',
+      type: transactionType,
       created_at: new Date().toISOString(),
       metadata: metadata || null
     });
@@ -351,12 +371,16 @@ Return valid JSON only.`
   }
 });
 
-// Run DB initialization (seed categories), then bind HTTP listening port
-initDatabase()
-  .then(() => {
-    app.listen(PORT, () => console.log(`ReceiptRadar server running → http://localhost:${PORT}`));
-  })
-  .catch((err) => {
-    console.error('Failed to initialize database:', err);
-    process.exit(1);
-  });
+export default app;
+
+// Only listen if not running on Vercel
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  initDatabase()
+    .then(() => {
+      app.listen(PORT, () => console.log(`ReceiptRadar server running → http://localhost:${PORT}`));
+    })
+    .catch((err) => {
+      console.error('Failed to initialize database:', err);
+      process.exit(1);
+    });
+}
