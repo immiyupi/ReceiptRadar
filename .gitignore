@@ -1,1 +1,22 @@
+# Environment secrets
 .env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# OS artifacts
+Thumbs.db
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local SQLite databases
+*.db
+database.txt
+

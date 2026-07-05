@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login // ReceiptRadar</title>
+  <!-- Google Fonts - Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS v4 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .heading-font {
+      font-family: 'Outfit', sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-[#92AD94] text-[#13261f] min-h-screen antialiased flex items-center justify-center p-4">
+
+  <!-- Notification Banner -->
+  <div id="notification-banner" class="fixed top-4 right-4 z-50 transform translate-y-[-100px] opacity-0 transition-all duration-300 pointer-events-none">
+    <div id="notification-card" class="bg-white/95 border border-[#13261f]/20 text-[#13261f] px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 backdrop-blur-md">
+      <div id="notification-icon" class="text-[#13261f]"></div>
+      <div id="notification-message" class="text-sm font-medium"></div>
+    </div>
+  </div>
+
+  <!-- Login Card (Glassmorphic) -->
+  <div class="bg-white/70 border border-white/40 rounded-3xl p-8 backdrop-blur-md shadow-2xl max-w-md w-full relative overflow-hidden group">
+    <div class="absolute inset-0 bg-gradient-to-tr from-white/10 to-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
+
+    <!-- Header -->
+    <div class="text-center mb-8 relative">
+      <div class="mx-auto h-12 w-12 rounded-xl bg-[#13261f] flex items-center justify-center shadow-lg shadow-[#13261f]/10 mb-4">
+        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2" />
+        </svg>
+      </div>
+      <h1 class="heading-font text-2xl font-extrabold tracking-tight text-[#13261f]">
+        Welcome to Receipt<span class="text-white font-extrabold">Radar</span>
+      </h1>
+      <p class="text-xs text-[#4c665a] mt-1 font-medium">Sign in or create a new account to sync expenses</p>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex bg-white/60 p-1 border border-slate-200 rounded-xl mb-6 relative">
+      <button id="tab-signin" class="flex-1 text-xs font-bold py-2 rounded-lg bg-[#13261f] text-white transition-all cursor-pointer">
+        Sign In
+      </button>
+      <button id="tab-signup" class="flex-1 text-xs font-bold py-2 rounded-lg text-[#4c665a] hover:text-[#13261f] transition-all cursor-pointer">
+        Sign Up
+      </button>
+    </div>
+
+    <!-- Form Errors -->
+    <div id="auth-error-box" class="hidden mb-4 p-3 bg-rose-50 border border-rose-250 text-rose-700 rounded-xl text-xs font-medium"></div>
+
+    <!-- Sign In Form -->
+    <form id="signin-form" class="space-y-4 relative">
+      <div>
+        <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Email Address</label>
+        <input type="email" id="signin-email" required placeholder="name@domain.com"
+          class="bg-white text-[#13261f] text-xs rounded-lg px-3 py-2.5 w-full border border-slate-200 focus:outline-none focus:border-[#13261f]/50">
+      </div>
+      <div>
+        <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Password</label>
+        <input type="password" id="signin-password" required placeholder="••••••••"
+          class="bg-white text-[#13261f] text-xs rounded-lg px-3 py-2.5 w-full border border-slate-200 focus:outline-none focus:border-[#13261f]/50">
+      </div>
+      <button type="submit" class="w-full bg-[#13261f] hover:bg-[#203c31] text-white text-xs font-semibold py-3 rounded-lg transition-all shadow-md shadow-[#13261f]/10 active:scale-[0.98] cursor-pointer">
+        Sign In
+      </button>
+    </form>
+
+    <!-- Sign Up Form (Hidden by default) -->
+    <form id="signup-form" class="space-y-4 relative hidden">
+      <div>
+        <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Full Name</label>
+        <input type="text" id="signup-name" required placeholder="John Doe"
+          class="bg-white text-[#13261f] text-xs rounded-lg px-3 py-2.5 w-full border border-slate-200 focus:outline-none focus:border-[#13261f]/50">
+      </div>
+      <div>
+        <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Email Address</label>
+        <input type="email" id="signup-email" required placeholder="name@domain.com"
+          class="bg-white text-[#13261f] text-xs rounded-lg px-3 py-2.5 w-full border border-slate-200 focus:outline-none focus:border-[#13261f]/50">
+      </div>
+      <div>
+        <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Password</label>
+        <input type="password" id="signup-password" required placeholder="At least 6 characters"
+          class="bg-white text-[#13261f] text-xs rounded-lg px-3 py-2.5 w-full border border-slate-200 focus:outline-none focus:border-[#13261f]/50">
+      </div>
+      <button type="submit" class="w-full bg-[#13261f] hover:bg-[#203c31] text-white text-xs font-semibold py-3 rounded-lg transition-all shadow-md shadow-[#13261f]/10 active:scale-[0.98] cursor-pointer">
+        Create Account
+      </button>
+    </form>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+  <script>
+    // Pure UI Toggle logic for Login / Register Form Tabs
+    const tabSignin = document.getElementById("tab-signin");
+    const tabSignup = document.getElementById("tab-signup");
+    const signinForm = document.getElementById("signin-form");
+    const signupForm = document.getElementById("signup-form");
+    const errorBox = document.getElementById("auth-error-box");
+
+    tabSignin.addEventListener("click", () => {
+      tabSignin.className = "flex-1 text-xs font-bold py-2 rounded-lg bg-[#13261f] text-white transition-all cursor-pointer";
+      tabSignup.className = "flex-1 text-xs font-bold py-2 rounded-lg text-[#4c665a] hover:text-[#13261f] transition-all cursor-pointer";
+      signinForm.classList.remove("hidden");
+      signupForm.classList.add("hidden");
+      errorBox.classList.add("hidden");
+    });
+
+    tabSignup.addEventListener("click", () => {
+      tabSignup.className = "flex-1 text-xs font-bold py-2 rounded-lg bg-[#13261f] text-white transition-all cursor-pointer";
+      tabSignin.className = "flex-1 text-xs font-bold py-2 rounded-lg text-[#4c665a] hover:text-[#13261f] transition-all cursor-pointer";
+      signupForm.classList.remove("hidden");
+      signinForm.classList.add("hidden");
+      errorBox.classList.add("hidden");
+    });
+
+    // Form Submissions link to window-exposed handler functions in app.js
+    signinForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.classList.add("hidden");
+      const email = document.getElementById("signin-email").value.trim();
+      const password = document.getElementById("signin-password").value;
+      try {
+        await window.handleSignIn(email, password);
+      } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+      }
+    });
+
+    signupForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.classList.add("hidden");
+      const name = document.getElementById("signup-name").value.trim();
+      const email = document.getElementById("signup-email").value.trim();
+      const password = document.getElementById("signup-password").value;
+      try {
+        await window.handleSignUp(name, email, password);
+      } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+      }
+    });
+  </script>
+</body>
+</html>
