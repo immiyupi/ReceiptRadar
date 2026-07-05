@@ -1,103 +1,59 @@
-// db.js — SQLite local database helper using Promises
-import sqlite3 from 'sqlite3';
-import path from 'path';
+// db.js — Firebase Admin + Firestore database helper
+import admin from 'firebase-admin';
+import dotenv from 'dotenv';
 
-// Store DB locally in the project root directory
-const dbPath = path.resolve('./database.db');
-const db = new sqlite3.Database(dbPath);
+dotenv.config();
 
-// Helper to run non-select SQL statements with Promise wrapper
-export function dbRun(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
+// Parse the service account JSON stored as an env variable
+// In .env: FIREBASE_SERVICE_ACCOUNT={"type":"service_account","project_id":"..."}
+let serviceAccount;
+try {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} catch (e) {
+  console.error('❌ Failed to parse FIREBASE_SERVICE_ACCOUNT env variable. Make sure it is valid JSON.');
+  process.exit(1);
+}
+
+// Initialize Firebase Admin (guard against duplicate init in watch/dev mode)
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
   });
 }
 
-// Helper to retrieve a single row
-export function dbGet(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
-}
+// Export the Firestore database instance
+export const db = admin.firestore();
 
-// Helper to retrieve all matching rows
-export function dbAll(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-}
+// Default system-wide categories to seed on first run
+const DEFAULT_CATEGORIES = [
+  { name: 'Food & Dining',  type: 'expense' },
+  { name: 'Entertainment',  type: 'expense' },
+  { name: 'Travel',         type: 'expense' },
+  { name: 'Shopping',       type: 'expense' },
+  { name: 'Investment',     type: 'expense' },
+  { name: 'Salary / Wages', type: 'income'  },
+];
 
-// Main initialization function for DB schema setup and category seeding
+/**
+ * Seeds default global categories into Firestore if they don't already exist.
+ * Idempotent — safe to call on every server start.
+ */
 export async function initDatabase() {
-  // Enable foreign keys constraint enforcement in SQLite
-  await dbRun("PRAGMA foreign_keys = ON;");
+  const catRef = db.collection('categories');
 
-  // 1. Users Table
-  await dbRun(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+  // Check if global defaults already exist (user_id === null means global)
+  const existing = await catRef.where('user_id', '==', null).get();
 
-  // 2. Categories Table
-  await dbRun(`
-    CREATE TABLE IF NOT EXISTS categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      UNIQUE(user_id, name)
-    )
-  `);
-
-  // 3. Transactions Table
-  await dbRun(`
-    CREATE TABLE IF NOT EXISTS transactions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      category TEXT NOT NULL,
-      amount REAL NOT NULL,
-      description TEXT,
-      transaction_date TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      metadata TEXT,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
-
-  // Seed default categories if not already seeded
-  const row = await dbGet("SELECT COUNT(*) as count FROM categories WHERE user_id IS NULL");
-  if (row.count === 0) {
-    const defaults = [
-      { name: "Food & Dining", type: "expense" },
-      { name: "Entertainment", type: "expense" },
-      { name: "Travel", type: "expense" },
-      { name: "Shopping", type: "expense" },
-      { name: "Investment", type: "expense" },
-      { name: "Salary / Wages", type: "income" }
-    ];
-    
-    for (const cat of defaults) {
-      await dbRun(
-        "INSERT INTO categories (user_id, name, type) VALUES (NULL, ?, ?)",
-        [cat.name, cat.type]
-      );
+  if (existing.empty) {
+    const batch = db.batch();
+    for (const cat of DEFAULT_CATEGORIES) {
+      const docRef = catRef.doc(); // auto-ID
+      batch.set(docRef, { ...cat, user_id: null });
     }
-    console.log("Database initialized and seeded with default categories.");
+    await batch.commit();
+    console.log('✅ Firestore initialized and seeded with default categories.');
+  } else {
+    console.log('✅ Firestore connected. Default categories already seeded.');
   }
 }
 

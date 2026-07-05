@@ -1,10 +1,10 @@
-// server.js — ReceiptRadar Backend (JWT & SQLite local database auth)
+// server.js — ReceiptRadar Backend (JWT & Firebase Firestore auth)
 import 'dotenv/config';
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { GoogleGenAI } from '@google/genai';
-import { dbRun, dbGet, dbAll, initDatabase } from './db.js';
+import { db, initDatabase } from './db.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -50,8 +50,8 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     // Check if email already registered
-    const existing = await dbGet('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing) {
+    const existingSnap = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (!existingSnap.empty) {
       return res.status(400).json({ error: 'Email address already registered.' });
     }
 
@@ -59,22 +59,26 @@ app.post('/api/auth/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hash = await bcrypt.hash(password, salt);
 
-    // Save user row
-    const result = await dbRun(
-      'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
-      [name, email, hash]
-    );
+    // Save user document — Firestore auto-generates the doc ID
+    const newUserRef = await db.collection('users').add({
+      name,
+      email,
+      password_hash: hash,
+      created_at: new Date().toISOString()
+    });
+
+    const userId = newUserRef.id;
 
     // Generate login token
     const token = jwt.sign(
-      { id: result.lastID, email, name },
+      { id: userId, email, name },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
     res.status(201).json({
       token,
-      user: { id: result.lastID, name, email }
+      user: { id: userId, name, email }
     });
   } catch (err) {
     console.error('Registration error:', err);
@@ -91,11 +95,14 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    // Fetch user row
-    const user = await dbGet('SELECT * FROM users WHERE email = ?', [email]);
-    if (!user) {
+    // Fetch user document by email
+    const snap = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (snap.empty) {
       return res.status(400).json({ error: 'Invalid email or password.' });
     }
+
+    const userDoc = snap.docs[0];
+    const user = { id: userDoc.id, ...userDoc.data() };
 
     // Validate password hash
     const isValid = await bcrypt.compare(password, user.password_hash);
@@ -123,39 +130,53 @@ app.post('/api/auth/login', async (req, res) => {
 // ── Transactions API: Get List (Protected) ──
 app.get('/api/transactions', authenticateToken, async (req, res) => {
   try {
-    const rows = await dbAll(
-      `SELECT t.*, c.type 
-       FROM transactions t
-       LEFT JOIN categories c ON c.id = (
-         SELECT id FROM categories 
-         WHERE name = t.category 
-           AND (user_id = t.user_id OR user_id IS NULL) 
-         ORDER BY user_id DESC 
-         LIMIT 1
-       )
-       WHERE t.user_id = ? 
-       ORDER BY t.transaction_date DESC, t.id DESC`,
-      [req.user.id]
-    );
+    // Fetch all transactions for the logged-in user, newest first
+    const snap = await db.collection('transactions')
+      .where('user_id', '==', req.user.id)
+      .orderBy('transaction_date', 'desc')
+      .get();
 
-    // Map SQLite string metadata back into objects
-    const mapped = rows.map((r) => ({
-      id: r.id,
-      user_id: r.user_id,
-      category: r.category,
-      amount: r.amount,
-      description: r.description,
-      vendor: r.description, // maps description to vendor for frontend
-      transaction_date: r.transaction_date,
-      date: r.transaction_date, // maps transaction_date to date for frontend
-      created_at: r.created_at,
-      metadata: r.metadata ? JSON.parse(r.metadata) : null,
-      type: r.type || 'expense' // explicit type
-    }));
+    // Fetch global + user-specific categories for type enrichment
+    const catSnap = await db.collection('categories')
+      .where('user_id', 'in', [null, req.user.id])
+      .get();
 
-    res.json(mapped);
+    // Build a lookup map: category name → type
+    const categoryTypeMap = {};
+    catSnap.forEach(doc => {
+      const data = doc.data();
+      // User-specific categories override global ones
+      categoryTypeMap[data.name] = data.type;
+    });
+
+    const transactions = [];
+    snap.forEach(doc => {
+      const r = doc.data();
+      transactions.push({
+        id: doc.id,
+        user_id: r.user_id,
+        category: r.category,
+        amount: r.amount,
+        description: r.description,
+        vendor: r.description,          // maps description to vendor for frontend
+        transaction_date: r.transaction_date,
+        date: r.transaction_date,       // maps transaction_date to date for frontend
+        created_at: r.created_at,
+        metadata: r.metadata || null,
+        type: r.type || categoryTypeMap[r.category] || 'expense'
+      });
+    });
+
+    res.json(transactions);
   } catch (err) {
     console.error('Fetch transactions error:', err);
+    // Firestore composite index errors include a link to create the index
+    if (err.code === 9) {
+      return res.status(500).json({
+        error: 'Firestore index required. Check server logs for the index creation link.',
+        details: err.message
+      });
+    }
     res.status(500).json({ error: 'Failed to retrieve transaction logs.' });
   }
 });
@@ -163,21 +184,24 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
 // ── Transactions API: Create Row (Protected) ──
 app.post('/api/transactions', authenticateToken, async (req, res) => {
   try {
-    const { category, amount, description, transaction_date, metadata } = req.body;
+    const { category, amount, description, transaction_date, metadata, type } = req.body;
 
     if (!category || amount === undefined || !transaction_date) {
       return res.status(400).json({ error: 'Category, amount, and date are required.' });
     }
 
-    const metadataStr = metadata ? JSON.stringify(metadata) : null;
+    const newDoc = await db.collection('transactions').add({
+      user_id: req.user.id,
+      category,
+      amount: parseFloat(amount),
+      description: description || '',
+      transaction_date,
+      type: type || 'expense',
+      created_at: new Date().toISOString(),
+      metadata: metadata || null
+    });
 
-    const result = await dbRun(
-      `INSERT INTO transactions (user_id, category, amount, description, transaction_date, metadata) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [req.user.id, category, parseFloat(amount), description || '', transaction_date, metadataStr]
-    );
-
-    res.status(201).json({ id: result.lastID });
+    res.status(201).json({ id: newDoc.id });
   } catch (err) {
     console.error('Create transaction error:', err);
     res.status(500).json({ error: 'Failed to create transaction log.' });
@@ -188,46 +212,29 @@ app.post('/api/transactions', authenticateToken, async (req, res) => {
 app.put('/api/transactions/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { category, amount, description, transaction_date } = req.body;
+    const { category, amount, description, transaction_date, type } = req.body;
 
-    // Verify ownership
-    const tx = await dbGet('SELECT id FROM transactions WHERE id = ? AND user_id = ?', [id, req.user.id]);
-    if (!tx) {
+    // Fetch document and verify ownership
+    const docRef = db.collection('transactions').doc(id);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists || docSnap.data().user_id !== req.user.id) {
       return res.status(404).json({ error: 'Transaction record not found or access denied.' });
     }
 
-    // Dynamically update passed fields
-    const updates = [];
-    const params = [];
+    // Build partial update object with only provided fields
+    const updates = {};
+    if (category !== undefined)         updates.category = category;
+    if (amount !== undefined)           updates.amount = parseFloat(amount);
+    if (description !== undefined)      updates.description = description;
+    if (transaction_date !== undefined) updates.transaction_date = transaction_date;
+    if (type !== undefined)             updates.type = type;
 
-    if (category !== undefined) {
-      updates.push('category = ?');
-      params.push(category);
-    }
-    if (amount !== undefined) {
-      updates.push('amount = ?');
-      params.push(parseFloat(amount));
-    }
-    if (description !== undefined) {
-      updates.push('description = ?');
-      params.push(description);
-    }
-    if (transaction_date !== undefined) {
-      updates.push('transaction_date = ?');
-      params.push(transaction_date);
-    }
-
-    if (updates.length === 0) {
+    if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'No fields to update.' });
     }
 
-    params.push(id, req.user.id);
-
-    await dbRun(
-      `UPDATE transactions SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`,
-      params
-    );
-
+    await docRef.update(updates);
     res.json({ success: true });
   } catch (err) {
     console.error('Update transaction error:', err);
@@ -240,13 +247,15 @@ app.delete('/api/transactions/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Verify ownership
-    const tx = await dbGet('SELECT id FROM transactions WHERE id = ? AND user_id = ?', [id, req.user.id]);
-    if (!tx) {
+    // Fetch document and verify ownership
+    const docRef = db.collection('transactions').doc(id);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists || docSnap.data().user_id !== req.user.id) {
       return res.status(404).json({ error: 'Transaction record not found or access denied.' });
     }
 
-    await dbRun('DELETE FROM transactions WHERE id = ? AND user_id = ?', [id, req.user.id]);
+    await docRef.delete();
     res.json({ success: true });
   } catch (err) {
     console.error('Delete transaction error:', err);
@@ -257,7 +266,20 @@ app.delete('/api/transactions/:id', authenticateToken, async (req, res) => {
 // ── Transactions API: Clear All For User (Protected) ──
 app.delete('/api/transactions', authenticateToken, async (req, res) => {
   try {
-    await dbRun('DELETE FROM transactions WHERE user_id = ?', [req.user.id]);
+    const snap = await db.collection('transactions')
+      .where('user_id', '==', req.user.id)
+      .get();
+
+    // Firestore batch delete (max 500 per batch)
+    const batchSize = 500;
+    const docs = snap.docs;
+
+    for (let i = 0; i < docs.length; i += batchSize) {
+      const batch = db.batch();
+      docs.slice(i, i + batchSize).forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+    }
+
     res.json({ success: true });
   } catch (err) {
     console.error('Clear transactions error:', err);
@@ -329,7 +351,7 @@ Return valid JSON only.`
   }
 });
 
-// Run DB table creations and seed defaults, then bind HTTP listening port
+// Run DB initialization (seed categories), then bind HTTP listening port
 initDatabase()
   .then(() => {
     app.listen(PORT, () => console.log(`ReceiptRadar server running → http://localhost:${PORT}`));
