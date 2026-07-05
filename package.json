@@ -2,8 +2,8 @@
   "name": "receiptradar",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node api/index.js",
+    "dev": "node --watch api/index.js"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
