@@ -25,7 +25,6 @@ function checkAuth() {
   if (token) {
     const payload = parseJwt(token);
     
-    // Check if token has expired
     if (payload && payload.exp * 1000 > Date.now()) {
       currentUser = payload;
       
@@ -34,22 +33,18 @@ function checkAuth() {
         return;
       }
 
-      // Populate navbar welcome details
       const navUserText = document.getElementById("nav-user-name");
       if (navUserText) {
         navUserText.textContent = currentUser.name;
       }
 
-      // Sync user data
-      fetchTransactions();
+      fetchCategories().then(fetchTransactions);
     } else {
-      // Handle expired session token
       handleLogoutSilently();
     }
   } else {
     currentUser = null;
     if (!isLoginPage) {
-      // Direct unauthorized user back to sign-in screen
       window.location.href = "login.html";
     }
   }
@@ -124,38 +119,69 @@ let monthlyChartInstance = null;
 let currentChartType = "doughnut"; // 'doughnut' or 'bar'
 let selectedFile = null;
 
-const VALID_CATEGORIES = [
-  "Food & Dining",
-  "Entertainment",
-  "Travel",
-  "Shopping",
-  "Investment",
-  "Salary / Wages",
-  "Other"
-];
-
-const categoryConfig = {
-  "Food & Dining": { color: "rgba(16, 185, 129, 0.85)", border: "rgb(16, 185, 129)" },
-  "Entertainment": { color: "rgba(217, 70, 239, 0.85)", border: "rgb(217, 70, 239)" },
-  "Travel": { color: "rgba(59, 130, 246, 0.85)", border: "rgb(59, 130, 246)" },
-  "Shopping": { color: "rgba(244, 63, 94, 0.85)", border: "rgb(244, 63, 94)" },
-  "Investment": { color: "rgba(245, 158, 11, 0.85)", border: "rgb(245, 158, 11)" },
-  "Salary / Wages": { color: "rgba(6, 182, 212, 0.85)", border: "rgb(6, 182, 212)" },
-  "Other": { color: "rgba(100, 116, 139, 0.85)", border: "rgb(100, 116, 139)" }
-};
-
-// --- 3. DOM Elements Selection (dashboard-only inputs) ---
-const dropzone = document.getElementById("dropzone");
-const fileInput = document.getElementById("file-input");
-const filePreviewBar = document.getElementById("file-preview-bar");
-const previewFilename = document.getElementById("preview-filename");
-const cancelUploadBtn = document.getElementById("cancel-upload");
 const globalLoader = document.getElementById("global-loader");
 const expenseTableBody = document.getElementById("expense-log-table-body");
 const tableEmptyState = document.getElementById("table-empty-state");
 const chartEmptyState = document.getElementById("chart-empty-state");
 const searchFilter = document.getElementById("search-filter");
 const categoryFilter = document.getElementById("category-filter");
+const statTopCategory = document.getElementById("stat-top-category");
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("file-input");
+const filePreviewBar = document.getElementById("file-preview-bar");
+const previewFilename = document.getElementById("preview-filename");
+const cancelUploadBtn = document.getElementById("cancel-upload");
+
+let VALID_CATEGORIES = [];
+let categoryConfig = {};
+
+const categoryColors = {
+  "Food & Dining": "rgba(16, 185, 129, 0.85),rgb(16, 185, 129)",
+  "Entertainment": "rgba(217, 70, 239, 0.85),rgb(217, 70, 239)",
+  "Travel": "rgba(59, 130, 246, 0.85),rgb(59, 130, 246)",
+  "Shopping": "rgba(244, 63, 94, 0.85),rgb(244, 63, 94)",
+  "Investment": "rgba(245, 158, 11, 0.85),rgb(245, 158, 11)",
+  "Salary / Wages": "rgba(6, 182, 212, 0.85),rgb(6, 182, 212)",
+  "Other": "rgba(100, 116, 139, 0.85),rgb(100, 116, 139)"
+};
+
+async function fetchCategories() {
+  const response = await fetch('/api/categories', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) throw new Error('Failed to fetch categories');
+  const categories = await response.json();
+  VALID_CATEGORIES = categories.map(c => c.name);
+  categoryConfig = {};
+  categories.forEach(c => {
+    const [color, border] = categoryColors[c.name]?.split(',') || ["rgba(100, 116, 139, 0.85)", "rgb(100, 116, 139)"];
+    categoryConfig[c.name] = { color, border };
+  });
+  populateCategoryDropdowns(categories);
+  renderExpensesTable();
+}
+
+function populateCategoryDropdowns(categories) {
+  const income = categories.filter(c => c.type === 'income');
+  const expense = categories.filter(c => c.type === 'expense');
+
+  const populate = (selectId, categories) => {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    select.innerHTML = '';
+    categories.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.name === 'All Categories' ? 'All' : c.name;
+      opt.textContent = c.name;
+      select.appendChild(opt);
+    });
+  };
+
+  populate('category-filter', [{ name: 'All Categories', type: null }, ...categories]);
+  populate('manual-category', categories);
+  populate('review-category', categories);
+}
 const clearAllDataBtn = document.getElementById("clear-all-data-btn");
 
 // Stat Elements
@@ -163,7 +189,6 @@ const statTotalIncome = document.getElementById("stat-total-income");
 const statTotalExpense = document.getElementById("stat-total-expense");
 const statNetBalance = document.getElementById("stat-net-balance");
 const statScans = document.getElementById("stat-scans");
-const statTopCategory = document.getElementById("stat-top-category");
 const statAvgExpense = document.getElementById("stat-avg-expense");
 
 // Manual Add Modal Elements
@@ -649,18 +674,10 @@ function renderExpensesTable() {
 function renderCharts() {
   // --- 1. Category Spending Breakdown Chart (Expenses Only) ---
   const aggregation = {};
-  VALID_CATEGORIES.forEach((cat) => {
-    aggregation[cat] = 0;
-  });
-
   const expensesOnly = transactions.filter((t) => t.type === "expense");
 
   expensesOnly.forEach((e) => {
-    if (aggregation[e.category] !== undefined) {
-      aggregation[e.category] += e.amount;
-    } else {
-      aggregation["Other"] += e.amount;
-    }
+    aggregation[e.category] = (aggregation[e.category] || 0) + e.amount;
   });
 
   const categories = Object.keys(aggregation);

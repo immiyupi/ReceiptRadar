@@ -18,6 +18,36 @@ app.use(express.static('public'));
 // Initialize Gemini client
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+// ── Category Lookup Helpers ──
+async function resolveCategoryType(name, userId) {
+  const catSnap = await db.collection('categories').where('name', '==', name).get();
+  const userCat = catSnap.docs.find(doc => doc.data().user_id === userId);
+  const globalCat = catSnap.docs.find(doc => doc.data().user_id === null);
+  const catDoc = userCat || globalCat;
+  return catDoc ? catDoc.data().type : null;
+}
+
+async function buildCategoryTypeMap(userId) {
+  const [globalSnap, userSnap] = await Promise.all([
+    db.collection('categories').where('user_id', '==', null).get(),
+    db.collection('categories').where('user_id', '==', userId).get()
+  ]);
+  const map = {};
+  globalSnap.forEach(doc => { map[doc.data().name] = doc.data().type; });
+  userSnap.forEach(doc => { map[doc.data().name] = doc.data().type; });
+  return map;
+}
+
+async function getOwnedTransaction(docId, userId, res) {
+  const docRef = db.collection('transactions').doc(docId);
+  const docSnap = await docRef.get();
+  if (!docSnap.exists || docSnap.data().user_id !== userId) {
+    res.status(404).json({ error: 'Transaction record not found or access denied.' });
+    return null;
+  }
+  return { docRef, data: docSnap.data() };
+}
+
 // ── Authentication Middleware ──
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -35,6 +65,33 @@ function authenticateToken(req, res, next) {
     return res.status(403).json({ error: 'Invalid or expired session token.' });
   }
 }
+
+// ── Categories API: Get List (Protected) ──
+app.get('/api/categories', authenticateToken, async (req, res) => {
+  try {
+    const [globalSnap, userSnap] = await Promise.all([
+      db.collection('categories').where('user_id', '==', null).get(),
+      db.collection('categories').where('user_id', '==', req.user.id).get()
+    ]);
+
+    const categories = new Map();
+
+    globalSnap.forEach(doc => {
+      const data = doc.data();
+      categories.set(data.name, { name: data.name, type: data.type, isGlobal: true });
+    });
+
+    userSnap.forEach(doc => {
+      const data = doc.data();
+      categories.set(data.name, { name: data.name, type: data.type, isGlobal: false });
+    });
+
+    res.json(Array.from(categories.values()));
+  } catch (err) {
+    console.error('Fetch categories error:', err);
+    res.status(500).json({ error: 'Failed to retrieve categories.' });
+  }
+});
 
 // ── Auth Route 1: Register ──
 app.post('/api/auth/register', async (req, res) => {
@@ -130,28 +187,11 @@ app.post('/api/auth/login', async (req, res) => {
 // ── Transactions API: Get List (Protected) ──
 app.get('/api/transactions', authenticateToken, async (req, res) => {
   try {
-    // Fetch all transactions for the logged-in user
     const snap = await db.collection('transactions')
       .where('user_id', '==', req.user.id)
       .get();
 
-    // Fetch global + user-specific categories for type enrichment.
-    // Firestore's `in` operator rejects null, so query each scope separately
-    // and let user-specific categories override global ones.
-    const [globalCatSnap, userCatSnap] = await Promise.all([
-      db.collection('categories').where('user_id', '==', null).get(),
-      db.collection('categories').where('user_id', '==', req.user.id).get()
-    ]);
-
-    const categoryTypeMap = {};
-    globalCatSnap.forEach(doc => {
-      const data = doc.data();
-      categoryTypeMap[data.name] = data.type;
-    });
-    userCatSnap.forEach(doc => {
-      const data = doc.data();
-      categoryTypeMap[data.name] = data.type;
-    });
+    const categoryTypeMap = await buildCategoryTypeMap(req.user.id);
 
     const transactions = [];
     snap.forEach(doc => {
@@ -176,7 +216,6 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
     res.json(transactions);
   } catch (err) {
     console.error('Fetch transactions error:', err);
-    // Firestore composite index errors include a link to create the index
     if (err.code === 9) {
       return res.status(500).json({
         error: 'Firestore index required. Check server logs for the index creation link.',
@@ -199,19 +238,8 @@ app.post('/api/transactions', authenticateToken, async (req, res) => {
     let transactionType = type;
 
     if (!transactionType) {
-      // Firestore's `in` operator rejects null, so query by name only and
-      // prefer a user-specific category over a global one.
-      const catSnap = await db.collection('categories')
-        .where('name', '==', category)
-        .get();
-
-      const userCat = catSnap.docs.find(doc => doc.data().user_id === req.user.id);
-      const globalCat = catSnap.docs.find(doc => doc.data().user_id === null);
-      const catDoc = userCat || globalCat;
-
-      if (catDoc) {
-        transactionType = catDoc.data().type;
-      } else {
+      transactionType = await resolveCategoryType(category, req.user.id);
+      if (!transactionType) {
         return res.status(400).json({ 
           error: `Category "${category}" not found. Please create the category first.` 
         });
@@ -243,18 +271,11 @@ app.post('/api/transactions', authenticateToken, async (req, res) => {
 // ── Transactions API: Update Field (Protected) ──
 app.put('/api/transactions/:id', authenticateToken, async (req, res) => {
   try {
-    const { id } = req.params;
+    const owned = await getOwnedTransaction(req.params.id, req.user.id, res);
+    if (!owned) return;
+
     const { category, amount, description, transaction_date, type } = req.body;
 
-    // Fetch document and verify ownership
-    const docRef = db.collection('transactions').doc(id);
-    const docSnap = await docRef.get();
-
-    if (!docSnap.exists || docSnap.data().user_id !== req.user.id) {
-      return res.status(404).json({ error: 'Transaction record not found or access denied.' });
-    }
-
-    // Build partial update object with only provided fields
     const updates = {};
     if (category !== undefined)         updates.category = category;
     if (amount !== undefined)           updates.amount = parseFloat(amount);
@@ -262,26 +283,19 @@ app.put('/api/transactions/:id', authenticateToken, async (req, res) => {
     if (transaction_date !== undefined) updates.transaction_date = transaction_date;
     if (type !== undefined)             updates.type = type;
 
-    // If category is being updated but type isn't, derive it from the new category.
-    // This keeps type in sync with category when users edit.
     if (category !== undefined && type === undefined) {
-      const catSnap = await db.collection('categories').where('name', '==', category).get();
-      const userCat = catSnap.docs.find(doc => doc.data().user_id === req.user.id);
-      const globalCat = catSnap.docs.find(doc => doc.data().user_id === null);
-      const catDoc = userCat || globalCat;
-
-      if (catDoc) {
-        updates.type = catDoc.data().type;
-      } else {
+      const derivedType = await resolveCategoryType(category, req.user.id);
+      if (!derivedType) {
         return res.status(400).json({ error: `Category "${category}" not found.` });
       }
+      updates.type = derivedType;
     }
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'No fields to update.' });
     }
 
-    await docRef.update(updates);
+    await owned.docRef.update(updates);
     res.json({ success: true });
   } catch (err) {
     console.error('Update transaction error:', err);
@@ -292,17 +306,10 @@ app.put('/api/transactions/:id', authenticateToken, async (req, res) => {
 // ── Transactions API: Delete Single (Protected) ──
 app.delete('/api/transactions/:id', authenticateToken, async (req, res) => {
   try {
-    const { id } = req.params;
+    const owned = await getOwnedTransaction(req.params.id, req.user.id, res);
+    if (!owned) return;
 
-    // Fetch document and verify ownership
-    const docRef = db.collection('transactions').doc(id);
-    const docSnap = await docRef.get();
-
-    if (!docSnap.exists || docSnap.data().user_id !== req.user.id) {
-      return res.status(404).json({ error: 'Transaction record not found or access denied.' });
-    }
-
-    await docRef.delete();
+    await owned.docRef.delete();
     res.json({ success: true });
   } catch (err) {
     console.error('Delete transaction error:', err);

@@ -32,6 +32,7 @@ const DEFAULT_CATEGORIES = [
   { name: 'Shopping',       type: 'expense' },
   { name: 'Investment',     type: 'expense' },
   { name: 'Salary / Wages', type: 'income'  },
+  { name: 'Other',          type: 'expense' },
 ];
 
 /**
@@ -41,19 +42,25 @@ const DEFAULT_CATEGORIES = [
 export async function initDatabase() {
   const catRef = db.collection('categories');
 
-  // Check if global defaults already exist (user_id === null means global)
   const existing = await catRef.where('user_id', '==', null).get();
 
   if (existing.empty) {
     const batch = db.batch();
     for (const cat of DEFAULT_CATEGORIES) {
-      const docRef = catRef.doc(); // auto-ID
+      const docRef = catRef.doc();
       batch.set(docRef, { ...cat, user_id: null });
     }
     await batch.commit();
     console.log('✅ Firestore initialized and seeded with default categories.');
   } else {
     console.log('✅ Firestore connected. Default categories already seeded.');
+    
+    const otherExists = existing.docs.some(doc => doc.data().name === 'Other');
+    if (!otherExists) {
+      const otherDoc = catRef.doc();
+      await otherDoc.set({ name: 'Other', type: 'expense', user_id: null });
+      console.log('✅ Added missing "Other" category to existing database.');
+    }
   }
 }
 
