@@ -137,13 +137,13 @@ let VALID_CATEGORIES = [];
 let categoryConfig = {};
 
 const categoryColors = {
-  "Food & Dining": "rgba(16, 185, 129, 0.85),rgb(16, 185, 129)",
-  "Entertainment": "rgba(217, 70, 239, 0.85),rgb(217, 70, 239)",
-  "Travel": "rgba(59, 130, 246, 0.85),rgb(59, 130, 246)",
-  "Shopping": "rgba(244, 63, 94, 0.85),rgb(244, 63, 94)",
-  "Investment": "rgba(245, 158, 11, 0.85),rgb(245, 158, 11)",
-  "Salary / Wages": "rgba(6, 182, 212, 0.85),rgb(6, 182, 212)",
-  "Other": "rgba(100, 116, 139, 0.85),rgb(100, 116, 139)"
+  "Food & Dining": "rgba(16, 185, 129, 0.85)|rgb(16, 185, 129)",
+  "Entertainment": "rgba(217, 70, 239, 0.85)|rgb(217, 70, 239)",
+  "Travel": "rgba(59, 130, 246, 0.85)|rgb(59, 130, 246)",
+  "Shopping": "rgba(244, 63, 94, 0.85)|rgb(244, 63, 94)",
+  "Investment": "rgba(245, 158, 11, 0.85)|rgb(245, 158, 11)",
+  "Salary / Wages": "rgba(6, 182, 212, 0.85)|rgb(6, 182, 212)",
+  "Other": "rgba(100, 116, 139, 0.85)|rgb(100, 116, 139)"
 };
 
 async function fetchCategories() {
@@ -155,7 +155,7 @@ async function fetchCategories() {
   VALID_CATEGORIES = categories.map(c => c.name);
   categoryConfig = {};
   categories.forEach(c => {
-    const [color, border] = categoryColors[c.name]?.split(',') || ["rgba(100, 116, 139, 0.85)", "rgb(100, 116, 139)"];
+    const [color, border] = categoryColors[c.name]?.split('|') || ["rgba(100, 116, 139, 0.85)", "rgb(100, 116, 139)"];
     categoryConfig[c.name] = { color, border };
   });
   populateCategoryDropdowns(categories);
