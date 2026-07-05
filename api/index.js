@@ -4,7 +4,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { GoogleGenAI } from '@google/genai';
-import { db, initDatabase } from './db.js';
+import { db, initDatabase } from '../db.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
