@@ -117,7 +117,8 @@ let transactions = []; // Main array syncing transaction list
 let chartInstance = null;
 let monthlyChartInstance = null;
 let currentChartType = "doughnut"; // 'doughnut' or 'bar'
-let selectedFile = null;
+let pendingScans = []; // Array of { file, status, result, error }
+const MAX_BATCH = 8;
 
 const globalLoader = document.getElementById("global-loader");
 const expenseTableBody = document.getElementById("expense-log-table-body");
@@ -180,7 +181,7 @@ function populateCategoryDropdowns(categories) {
 
   populate('category-filter', [{ name: 'All Categories', type: null }, ...categories]);
   populate('manual-category', categories);
-  populate('review-category', categories);
+  // review-category is now dynamically populated in batch modal
 }
 const clearAllDataBtn = document.getElementById("clear-all-data-btn");
 
@@ -336,69 +337,183 @@ async function clearAllUserTransactions() {
 
 
 // --- 5. AI Receipt Scanner Flow (Authenticated Server proxy) ---
-async function processReceiptWithGemini(file) {
+
+// Process a single receipt image
+async function processSingleReceipt(file) {
+  const base64DataUrl = await getBase64(file);
+  const base64Data = base64DataUrl.split(",")[1];
+  const mimeType = file.type;
+
+  const response = await fetch("/api/scan-receipt", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify({ imageBase64: base64Data, mimeType })
+  });
+
+  if (!response.ok) {
+    const errData = await response.json();
+    throw new Error(errData.error || "HTTP Error contacting server.");
+  }
+
+  return await response.json();
+}
+
+// Process multiple receipts in parallel
+async function processBatchReceipts(files) {
   globalLoader.classList.remove("hidden");
+  
+  // Update loader text for batch
+  const loaderText = globalLoader.querySelector("h3");
+  const originalText = loaderText.textContent;
+  loaderText.textContent = `Analyzing ${files.length} Receipt${files.length > 1 ? "s" : ""}`;
 
   try {
-    const base64DataUrl = await getBase64(file);
-    const base64Data = base64DataUrl.split(",")[1];
-    const mimeType = file.type;
+    const promises = files.map(file => 
+      processSingleReceipt(file)
+        .then(result => ({ ok: true, result, fileName: file.name }))
+        .catch(error => ({ ok: false, error, fileName: file.name }))
+    );
 
-    const response = await fetch("/api/scan-receipt", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
-      },
-      body: JSON.stringify({ imageBase64: base64Data, mimeType })
-    });
+    const allSettled = await Promise.allSettled(promises);
+    const results = allSettled.map(s => s.status === 'fulfilled' ? s.value : { ok: false, error: s.reason.message, fileName: files[allSettled.indexOf(s)]?.name });
 
-    if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.error || "HTTP Error contacting server.");
+    const successful = results.filter(r => r.ok);
+    const failed = results.filter(r => !r.ok);
+
+    if (failed.length > 0) {
+      const errorList = failed.map(f => f.fileName).join(", ");
+      showNotification(`Skipped ${failed.length} receipt${failed.length > 1 ? "s" : ""}: ${errorList}`, "error");
     }
 
-    const parsedResult = await response.json();
+    if (successful.length === 0) {
+      showNotification("No receipts were successfully scanned.", "error");
+      return;
+    }
 
     // Reset upload UI elements early
-    selectedFile = null;
+    pendingScans = [];
     if (fileInput) fileInput.value = "";
     if (filePreviewBar) filePreviewBar.classList.add("hidden");
     if (dropzone) dropzone.classList.remove("hidden");
 
-    // Open Review & Edit verification modal instead of auto-saving to DB
-    openReviewModal(parsedResult);
+    // Open Batch Review & Edit modal
+    openBatchReviewModal(successful.map(s => s.result));
 
   } catch (error) {
-    console.error("Gemini API processing failed:", error);
-    showNotification(`Failed to scan receipt: ${error.message}`, "error");
+    console.error("Batch processing failed:", error);
+    showNotification(`Failed to process receipts: ${error.message}`, "error");
   } finally {
+    loaderText.textContent = originalText;
     globalLoader.classList.add("hidden");
   }
 }
 
-// Review & Edit Modal Handlers
-function openReviewModal(parsed) {
+// Batch Review & Edit Modal Handlers
+function openBatchReviewModal(parsedResults) {
   const modal = document.getElementById("review-modal");
-  const dateInput = document.getElementById("review-date");
-  const vendorInput = document.getElementById("review-vendor");
-  const amountInput = document.getElementById("review-amount");
-  const catSelect = document.getElementById("review-category");
+  const subtitle = document.getElementById("review-subtitle");
+  const container = document.getElementById("review-rows-container");
+  const confirmBtn = document.getElementById("review-confirm-btn");
 
   if (!modal) return;
 
-  // Pre-fill inputs with extracted Gemini data
-  dateInput.value = parsed.date || new Date().toISOString().split("T")[0];
-  vendorInput.value = parsed.vendor || "";
-  amountInput.value = parseFloat(parsed.amount || 0).toFixed(2);
+  // Update subtitle with count
+  subtitle.textContent = `AI extracted ${parsedResults.length} receipt${parsedResults.length > 1 ? "s" : ""}. Please verify and correct if needed.`;
 
-  // Category validation with fallback logic
-  const matchedCategory = VALID_CATEGORIES.includes(parsed.category)
-    ? parsed.category
-    : "Other";
-  catSelect.value = matchedCategory;
+  // Clear existing rows
+  container.innerHTML = "";
 
+  // Render rows for each extracted receipt
+  parsedResults.forEach((parsed, index) => {
+    const row = document.createElement("div");
+    row.className = "bg-white border border-slate-200 rounded-lg p-4 space-y-3 relative group";
+    row.dataset.index = index;
+
+    // Remove row button
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "absolute top-2 right-2 text-slate-400 hover:text-rose-500 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity";
+    removeBtn.innerHTML = `<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>`;
+    removeBtn.addEventListener("click", () => {
+      row.remove();
+      updateConfirmBtn();
+    });
+    row.appendChild(removeBtn);
+
+    // Row header
+    const header = document.createElement("div");
+    header.className = "text-xs font-semibold text-[#4c665a] mb-2";
+    header.textContent = `Receipt ${index + 1}`;
+    row.appendChild(header);
+
+    // Date
+    const dateDiv = document.createElement("div");
+    dateDiv.innerHTML = `
+      <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Date</label>
+      <input type="date" class="review-date bg-white text-[#13261f] text-xs rounded-lg px-3 py-2 w-full border border-slate-200
+             focus:outline-none focus:border-[#13261f]/50" value="${parsed.date || new Date().toISOString().split("T")[0]}">
+    `;
+    row.appendChild(dateDiv);
+
+    // Vendor
+    const vendorDiv = document.createElement("div");
+    vendorDiv.innerHTML = `
+      <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Vendor</label>
+      <input type="text" class="review-vendor bg-white text-[#13261f] text-xs rounded-lg px-3 py-2 w-full border border-slate-200
+             focus:outline-none focus:border-[#13261f]/50" placeholder="Merchant name" value="${parsed.vendor || ""}">
+    `;
+    row.appendChild(vendorDiv);
+
+    // Amount
+    const amountDiv = document.createElement("div");
+    amountDiv.innerHTML = `
+      <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Amount (฿)</label>
+      <input type="number" step="0.01" class="review-amount bg-white text-[#13261f] text-xs rounded-lg px-3 py-2 w-full border border-slate-200
+             focus:outline-none focus:border-[#13261f]/50" placeholder="0.00" value="${parseFloat(parsed.amount || 0).toFixed(2)}">
+    `;
+    row.appendChild(amountDiv);
+
+    // Category
+    const matchedCategory = VALID_CATEGORIES.includes(parsed.category)
+      ? parsed.category
+      : "Other";
+    
+    const catDiv = document.createElement("div");
+    catDiv.innerHTML = `
+      <label class="block text-[10px] font-semibold text-[#4c665a] uppercase tracking-wider mb-1">Category</label>
+      <select class="review-category bg-white text-[#13261f] text-xs rounded-lg px-3 py-2 w-full border border-slate-200
+             focus:outline-none focus:border-[#13261f]/50 cursor-pointer"></select>
+    `;
+    row.appendChild(catDiv);
+
+    // Populate category dropdown
+    const catSelect = catDiv.querySelector(".review-category");
+    VALID_CATEGORIES.forEach(catName => {
+      const option = document.createElement("option");
+      option.value = catName;
+      option.textContent = catName;
+      option.className = "bg-white text-[#13261f]";
+      if (catName === matchedCategory) {
+        option.selected = true;
+      }
+      catSelect.appendChild(option);
+    });
+
+    container.appendChild(row);
+  });
+
+  updateConfirmBtn();
   modal.classList.remove("hidden");
+}
+
+function updateConfirmBtn() {
+  const confirmBtn = document.getElementById("review-confirm-btn");
+  const rows = document.querySelectorAll("#review-rows-container > div");
+  const count = rows.length;
+  confirmBtn.textContent = `Save All (${count})`;
+  confirmBtn.disabled = count === 0;
 }
 
 function handleReviewCancel() {
@@ -408,34 +523,65 @@ function handleReviewCancel() {
 }
 
 async function handleReviewConfirm() {
-  const date = document.getElementById("review-date").value;
-  const vendor = document.getElementById("review-vendor").value.trim();
-  const rawAmt = document.getElementById("review-amount").value;
-  const category = document.getElementById("review-category").value;
+  const rows = document.querySelectorAll("#review-rows-container > div");
+  const transactionsToSave = [];
+  const errors = [];
 
-  if (!date || !vendor || !rawAmt || !category) {
-    showNotification("Please fill in all manual fields in the review window.", "error");
+  rows.forEach((row, index) => {
+    try {
+      const date = row.querySelector(".review-date").value;
+      const vendor = row.querySelector(".review-vendor").value.trim();
+      const rawAmt = row.querySelector(".review-amount").value;
+      const category = row.querySelector(".review-category").value;
+
+      if (!date || !vendor || !rawAmt || !category) {
+        errors.push(`Row ${index + 1}: Missing required fields`);
+        return;
+      }
+
+      const cleanAmount = parseFloat(parseFloat(rawAmt).toFixed(2));
+      
+      if (isNaN(cleanAmount) || cleanAmount < 0) {
+        errors.push(`Row ${index + 1}: Invalid amount`);
+        return;
+      }
+
+      transactionsToSave.push({ category, amount: cleanAmount, vendor, date, metadata: { source: "receipt-scan" } });
+    } catch (error) {
+      errors.push(`Row ${index + 1}: ${error.message}`);
+    }
+  });
+
+  if (errors.length > 0) {
+    showNotification(`Failed to validate some rows: ${errors.join(", ")}`, "error");
     return;
   }
 
-  // Safely enforce 2-decimal formatting structure
-  const cleanAmount = parseFloat(parseFloat(rawAmt).toFixed(2));
+  if (transactionsToSave.length === 0) {
+    showNotification("No valid transactions to save.", "error");
+    return;
+  }
 
   try {
-    await addTransaction({
-      category: category,
-      amount: cleanAmount,
-      vendor: vendor,
-      date: date,
-      metadata: { source: "receipt-scan" }
-    });
+    // Save all transactions
+    const savePromises = transactionsToSave.map(t => 
+      addTransaction(t).catch(err => ({ error: err.message }))
+    );
+
+    const saveResults = await Promise.allSettled(savePromises);
+    const failedSaves = saveResults.filter(r => r.status === 'rejected' || r.value?.error);
+    
+    if (failedSaves.length > 0) {
+      showNotification(`Saved ${transactionsToSave.length - failedSaves.length} of ${transactionsToSave.length} transactions.`, "error");
+    } else {
+      showNotification(`Successfully saved ${transactionsToSave.length} transactions!`);
+    }
     
     const modal = document.getElementById("review-modal");
     if (modal) modal.classList.add("hidden");
-    showNotification("Transaction verified and logged successfully!");
   } catch (error) {
-    console.error("Failed to add verified transaction:", error);
-    showNotification("Failed to save transaction.", "error");
+    console.error("Failed to save transactions:", error);
+    showNotification("Failed to save transactions.", "error");
   }
 }
 
@@ -940,19 +1086,19 @@ document.addEventListener("DOMContentLoaded", () => {
     dropzone.classList.add("border-slate-800");
 
     if (e.dataTransfer.files.length > 0) {
-      handleFileSelection(e.dataTransfer.files[0]);
+      handleFileSelection(e.dataTransfer.files);
     }
   });
 
   fileInput.addEventListener("change", (e) => {
     if (e.target.files.length > 0) {
-      handleFileSelection(e.target.files[0]);
+      handleFileSelection(e.target.files);
     }
   });
 
   cancelUploadBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    selectedFile = null;
+    pendingScans = [];
     fileInput.value = "";
     filePreviewBar.classList.add("hidden");
     dropzone.classList.remove("hidden");
@@ -1011,15 +1157,31 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // File input handlers
-function handleFileSelection(file) {
-  if (!file.type.startsWith("image/")) {
-    showNotification("Only receipt image files are supported.", "error");
+function handleFileSelection(files) {
+  const fileArray = Array.from(files);
+  
+  // Validate all files are images
+  const nonImages = fileArray.filter(f => !f.type.startsWith("image/"));
+  if (nonImages.length > 0) {
+    showNotification(`Skipped ${nonImages.length} non-image file${nonImages.length > 1 ? "s" : ""}.`, "error");
+  }
+  
+  const imageFiles = fileArray.filter(f => f.type.startsWith("image/"));
+  
+  if (imageFiles.length === 0) {
+    showNotification("No valid image files selected.", "error");
     return;
   }
-  selectedFile = file;
-  previewFilename.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
-  filePreviewBar.classList.remove("hidden");
-  processReceiptWithGemini(file);
+  
+  // Enforce max batch size
+  if (imageFiles.length > MAX_BATCH) {
+    showNotification(`Max ${MAX_BATCH} images allowed. Processing first ${MAX_BATCH}.`, "error");
+  }
+  
+  const filesToProcess = imageFiles.slice(0, MAX_BATCH);
+  
+  // Process batch
+  processBatchReceipts(filesToProcess);
 }
 
 function getBase64(file) {
