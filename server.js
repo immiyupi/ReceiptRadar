@@ -135,16 +135,21 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
       .where('user_id', '==', req.user.id)
       .get();
 
-    // Fetch global + user-specific categories for type enrichment
-    const catSnap = await db.collection('categories')
-      .where('user_id', 'in', [null, req.user.id])
-      .get();
+    // Fetch global + user-specific categories for type enrichment.
+    // Firestore's `in` operator rejects null, so query each scope separately
+    // and let user-specific categories override global ones.
+    const [globalCatSnap, userCatSnap] = await Promise.all([
+      db.collection('categories').where('user_id', '==', null).get(),
+      db.collection('categories').where('user_id', '==', req.user.id).get()
+    ]);
 
-    // Build a lookup map: category name → type
     const categoryTypeMap = {};
-    catSnap.forEach(doc => {
+    globalCatSnap.forEach(doc => {
       const data = doc.data();
-      // User-specific categories override global ones
+      categoryTypeMap[data.name] = data.type;
+    });
+    userCatSnap.forEach(doc => {
+      const data = doc.data();
       categoryTypeMap[data.name] = data.type;
     });
 
@@ -194,20 +199,27 @@ app.post('/api/transactions', authenticateToken, async (req, res) => {
     let transactionType = type;
 
     if (!transactionType) {
+      // Firestore's `in` operator rejects null, so query by name only and
+      // prefer a user-specific category over a global one.
       const catSnap = await db.collection('categories')
         .where('name', '==', category)
-        .where('user_id', 'in', [null, req.user.id])
-        .limit(1)
         .get();
 
-      if (!catSnap.empty) {
-        const catDoc = catSnap.docs.find(doc => doc.data().user_id === req.user.id) || catSnap.docs[0];
-        transactionType = catDoc.data().type;
-      }
+      const userCat = catSnap.docs.find(doc => doc.data().user_id === req.user.id);
+      const globalCat = catSnap.docs.find(doc => doc.data().user_id === null);
+      const catDoc = userCat || globalCat;
 
-      if (!transactionType) {
-        transactionType = 'expense';
+      if (catDoc) {
+        transactionType = catDoc.data().type;
+      } else {
+        return res.status(400).json({ 
+          error: `Category "${category}" not found. Please create the category first.` 
+        });
       }
+    }
+
+    if (!['income', 'expense'].includes(transactionType)) {
+      return res.status(400).json({ error: 'Type must be "income" or "expense"' });
     }
 
     const newDoc = await db.collection('transactions').add({
@@ -249,6 +261,21 @@ app.put('/api/transactions/:id', authenticateToken, async (req, res) => {
     if (description !== undefined)      updates.description = description;
     if (transaction_date !== undefined) updates.transaction_date = transaction_date;
     if (type !== undefined)             updates.type = type;
+
+    // If category is being updated but type isn't, derive it from the new category.
+    // This keeps type in sync with category when users edit.
+    if (category !== undefined && type === undefined) {
+      const catSnap = await db.collection('categories').where('name', '==', category).get();
+      const userCat = catSnap.docs.find(doc => doc.data().user_id === req.user.id);
+      const globalCat = catSnap.docs.find(doc => doc.data().user_id === null);
+      const catDoc = userCat || globalCat;
+
+      if (catDoc) {
+        updates.type = catDoc.data().type;
+      } else {
+        return res.status(400).json({ error: `Category "${category}" not found.` });
+      }
+    }
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'No fields to update.' });

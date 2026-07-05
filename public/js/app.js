@@ -205,7 +205,7 @@ async function fetchTransactions() {
   }
 }
 
-async function addTransaction({ type = "expense", category, amount, vendor, date, metadata = null }) {
+async function addTransaction({ category, amount, vendor, date, metadata = null }) {
   const response = await fetch('/api/transactions', {
     method: 'POST',
     headers: {
@@ -217,8 +217,7 @@ async function addTransaction({ type = "expense", category, amount, vendor, date
       amount,
       description: vendor, // maps vendor name into the description column
       transaction_date: date,
-      metadata,
-      type
+      metadata
     })
   });
 
@@ -399,7 +398,6 @@ async function handleReviewConfirm() {
 
   try {
     await addTransaction({
-      type: "expense",
       category: category,
       amount: cleanAmount,
       vendor: vendor,
@@ -980,7 +978,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       await addTransaction({
-        type: "expense",
         category,
         amount,
         vendor,
