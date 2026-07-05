@@ -1,19 +1,22 @@
 // server.js — ReceiptRadar Backend (JWT & Firebase Firestore auth)
 import 'dotenv/config';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { GoogleGenAI } from '@google/genai';
-import { db, initDatabase } from '../db.js';
+import { db, initDatabase } from './db.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Parse JSON bodies up to 10MB
 app.use(express.json({ limit: '10mb' }));
 
-// Serve static web pages from public directory
-app.use(express.static('public'));
+// Serve static web pages from public directory (Vercel-safe absolute path)
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Set Content Security Policy headers
 app.use((req, res, next) => {
