@@ -18,6 +18,34 @@ app.use(express.json({ limit: '10mb' }));
 // Serve static web pages from public directory (Vercel-safe absolute path)
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Protected route handler for root - check auth before serving index.html
+app.get('/', (req, res) => {
+  const token = req.cookies?.auth_token || req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.redirect('/login.html');
+  }
+  try {
+    jwt.verify(token, process.env.JWT_SECRET);
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  } catch {
+    res.redirect('/login.html');
+  }
+});
+
+// Also protect index.html explicitly
+app.get('/index.html', (req, res) => {
+  const token = req.cookies?.auth_token || req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.redirect('/login.html');
+  }
+  try {
+    jwt.verify(token, process.env.JWT_SECRET);
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  } catch {
+    res.redirect('/login.html');
+  }
+});
+
 // Set Content Security Policy headers
 app.use((req, res, next) => {
   res.setHeader(
