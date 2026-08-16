@@ -139,6 +139,7 @@ let categoryConfig = {};
 
 const categoryColors = {
   "Food & Dining": "rgba(16, 185, 129, 0.85)|rgb(16, 185, 129)",
+  "Groceries": "rgba(234, 179, 8, 0.85)|rgb(234, 179, 8)",
   "Entertainment": "rgba(217, 70, 239, 0.85)|rgb(217, 70, 239)",
   "Travel": "rgba(59, 130, 246, 0.85)|rgb(59, 130, 246)",
   "Shopping": "rgba(244, 63, 94, 0.85)|rgb(244, 63, 94)",
@@ -229,6 +230,20 @@ async function fetchTransactions() {
     console.error(error);
     showNotification('Error syncing logs with database.', 'error');
   }
+}
+
+function isDuplicateTransaction({ vendor, amount, date }) {
+  return transactions.some(t => {
+    const tVendor = (t.vendor || t.description || "").trim().toLowerCase();
+    const newVendor = (vendor || "").trim().toLowerCase();
+    const tAmount = parseFloat(t.amount);
+    const newAmount = parseFloat(amount);
+    
+    const tDate = (t.date || t.transaction_date || "").split("T")[0];
+    const newDate = (date || "").split("T")[0];
+
+    return tVendor === newVendor && tAmount === newAmount && tDate === newDate;
+  });
 }
 
 async function addTransaction({ category, amount, vendor, date, metadata = null }) {
@@ -562,6 +577,28 @@ async function handleReviewConfirm() {
     return;
   }
 
+  // Check for duplicates in the batch or existing database
+  let hasDuplicate = false;
+  const seenInBatch = new Set();
+  for (const t of transactionsToSave) {
+    if (isDuplicateTransaction(t)) {
+      hasDuplicate = true;
+      break;
+    }
+    const batchKey = `${t.vendor.toLowerCase().trim()}|${t.amount}|${t.date}`;
+    if (seenInBatch.has(batchKey)) {
+      hasDuplicate = true;
+      break;
+    }
+    seenInBatch.add(batchKey);
+  }
+
+  if (hasDuplicate) {
+    if (!confirm("Are you sure you want to do this bill?")) {
+      return;
+    }
+  }
+
   try {
     // Save all transactions
     const savePromises = transactionsToSave.map(t => 
@@ -796,7 +833,7 @@ function renderExpensesTable() {
     const tdDelete = document.createElement("td");
     tdDelete.className = "px-4 py-3 text-center w-12";
     tdDelete.innerHTML = `
-      <button class="text-slate-600 hover:text-rose-500 focus:outline-none transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 cursor-pointer">
+      <button class="text-black hover:text-rose-500 focus:outline-none transition-colors p-1 cursor-pointer">
         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
         </svg>
@@ -1137,6 +1174,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!vendor || isNaN(amount) || !date || !category) {
       showNotification("Please fill in all manual fields.", "error");
       return;
+    }
+
+    // Check duplicate
+    if (isDuplicateTransaction({ vendor, amount, date })) {
+      if (!confirm("Are you sure you want to do this bill?")) {
+        return;
+      }
     }
 
     try {

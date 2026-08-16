@@ -27,6 +27,7 @@ export const db = admin.firestore();
 // Default system-wide categories to seed on first run
 const DEFAULT_CATEGORIES = [
   { name: 'Food & Dining',  type: 'expense' },
+  { name: 'Groceries',      type: 'expense' },
   { name: 'Entertainment',  type: 'expense' },
   { name: 'Travel',         type: 'expense' },
   { name: 'Shopping',       type: 'expense' },
@@ -60,6 +61,13 @@ export async function initDatabase() {
       const otherDoc = catRef.doc();
       await otherDoc.set({ name: 'Other', type: 'expense', user_id: null });
       console.log('✅ Added missing "Other" category to existing database.');
+    }
+
+    const groceriesExists = existing.docs.some(doc => doc.data().name === 'Groceries');
+    if (!groceriesExists) {
+      const groceriesDoc = catRef.doc();
+      await groceriesDoc.set({ name: 'Groceries', type: 'expense', user_id: null });
+      console.log('✅ Added missing "Groceries" category to existing database.');
     }
   }
 }
